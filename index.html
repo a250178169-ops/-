@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dao Seeker - 寻道大仙</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #0a0a0f;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+        }
+        canvas {
+            display: block;
+            border: 2px solid #00f2ff;
+            box-shadow: 0 0 30px rgba(0, 242, 255, 0.4);
+            width: 1920px;
+            height: 1080px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="webgl" width="1920" height="1080"></canvas>
+    </div>
+    
+    <!-- Web Audio 音效合成器 + 原创古风BGM -->
+    <script>
+    window.GameAudio = (function() {
+        var audioCtx = null;
+        var masterGain = null;
+        var bgmPlaying = false;
+        var bgmNodes = [];
+        var bgmInterval = null;
+        
+        function init() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.connect(audioCtx.destination);
+            masterGain.gain.value = 0.5;
+        }
+        
+        function ensureContext() {
+            if (!audioCtx) init();
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+        
+        // 8-bit 风格音效
+        var sounds = {
+            sword_attack: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.05);
+                osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(vol * 0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.15);
+            },
+            
+            sword_hit: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(vol * 0.4, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            },
+            
+            enemy_death: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.2);
+                gain.gain.setValueAtTime(vol * 0.25, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.2);
+            },
+            
+            exp_pickup: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.08);
+                gain.gain.setValueAtTime(vol * 0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            },
+            
+            level_up: function(vol) {
+                ensureContext();
+                var notes = [523, 659, 784, 1047];
+                notes.forEach(function(freq, i) {
+                    var osc = audioCtx.createOscillator();
+                    var gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.1);
+                    gain.gain.linearRampToValueAtTime(vol * 0.3, audioCtx.currentTime + i * 0.1 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i * 0.1 + 0.2);
+                    osc.connect(gain);
+                    gain.connect(masterGain);
+                    osc.start(audioCtx.currentTime + i * 0.1);
+                    osc.stop(audioCtx.currentTime + i * 0.1 + 0.25);
+                });
+            },
+            
+            player_hit: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.15);
+                gain.gain.setValueAtTime(vol * 0.35, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.15);
+            },
+            
+            game_over: function(vol) {
+                ensureContext();
+                var notes = [392, 349, 330, 262];
+                notes.forEach(function(freq, i) {
+                    var osc = audioCtx.createOscillator();
+                    var gain = audioCtx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.2);
+                    gain.gain.linearRampToValueAtTime(vol * 0.4, audioCtx.currentTime + i * 0.2 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i * 0.2 + 0.4);
+                    osc.connect(gain);
+                    gain.connect(masterGain);
+                    osc.start(audioCtx.currentTime + i * 0.2);
+                    osc.stop(audioCtx.currentTime + i * 0.2 + 0.5);
+                });
+            },
+            
+            menu_select: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.value = 440;
+                gain.gain.setValueAtTime(vol * 0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            },
+            
+            menu_confirm: function(vol) {
+                ensureContext();
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(523, audioCtx.currentTime);
+                osc.frequency.setValueAtTime(659, audioCtx.currentTime + 0.06);
+                gain.gain.setValueAtTime(vol * 0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(masterGain);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.15);
+            },
+            
+            game_start: function(vol) {
+                ensureContext();
+                var notes = [262, 330, 392, 523];
+                notes.forEach(function(freq, i) {
+                    var osc = audioCtx.createOscillator();
+                    var gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.08);
+                    gain.gain.linearRampToValueAtTime(vol * 0.25, audioCtx.currentTime + i * 0.08 + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i * 0.08 + 0.15);
+                    osc.connect(gain);
+                    gain.connect(masterGain);
+                    osc.start(audioCtx.currentTime + i * 0.08);
+                    osc.stop(audioCtx.currentTime + i * 0.08 + 0.2);
+                });
+            }
+        };
+        
+        // ============ 原创古风BGM（五声音阶）============
+        // 使用中国传统五声音阶：宫(C)商(D)角(E)徵(G)羽(A)
+        // 这是一段原创的悠远修仙风格旋律
+        
+        var bgmVolume = 0.15;
+        var currentNote = 0;
+        
+        // 原创旋律序列 (频率Hz, 时长倍数)
+        // 基于A小调五声音阶的原创旋律
+        var melodyA = [
+            // 第一乐句 - 悠远开场
+            {f: 440, d: 2},    // A4
+            {f: 330, d: 1},    // E4
+            {f: 392, d: 1},    // G4
+            {f: 440, d: 2},    // A4
+            {f: 0, d: 1},      // 休止
+            
+            // 第二乐句 - 上行
+            {f: 330, d: 1},    // E4
+            {f: 392, d: 1},    // G4
+            {f: 440, d: 1},    // A4
+            {f: 523, d: 2},    // C5
+            {f: 587, d: 1},    // D5
+            {f: 523, d: 1},    // C5
+            
+            // 第三乐句 - 下行回落
+            {f: 440, d: 2},    // A4
+            {f: 392, d: 1},    // G4
+            {f: 330, d: 1},    // E4
+            {f: 294, d: 2},    // D4
+            {f: 0, d: 1},      // 休止
+            
+            // 第四乐句 - 结束句
+            {f: 330, d: 1},    // E4
+            {f: 392, d: 1.5},  // G4
+            {f: 330, d: 0.5},  // E4
+            {f: 294, d: 1},    // D4
+            {f: 262, d: 3},    // C4
+            {f: 0, d: 2},      // 休止
+        ];
+        
+        // 第二段旋律 - 更高昂
+        var melodyB = [
+            {f: 523, d: 2},    // C5
+            {f: 587, d: 1},    // D5
+            {f: 659, d: 1},    // E5
+            {f: 784, d: 2},    // G5
+            {f: 0, d: 1},
+            
+            {f: 659, d: 1},    // E5
+            {f: 587, d: 1},    // D5
+            {f: 523, d: 1},    // C5
+            {f: 440, d: 2},    // A4
+            {f: 392, d: 1},    // G4
+            {f: 440, d: 1},    // A4
+            
+            {f: 523, d: 1.5},  // C5
+            {f: 440, d: 0.5},  // A4
+            {f: 392, d: 1},    // G4
+            {f: 330, d: 1},    // E4
+            {f: 294, d: 2},    // D4
+            {f: 0, d: 1},
+            
+            {f: 330, d: 1},    // E4
+            {f: 294, d: 1},    // D4
+            {f: 262, d: 3},    // C4
+            {f: 0, d: 3},
+        ];
+        
+        var fullMelody = melodyA.concat(melodyB);
+        var noteIndex = 0;
+        var baseNoteDuration = 280; // 基础音符时长(ms)
+        
+        function playBGMNote() {
+            if (!bgmPlaying) return;
+            
+            ensureContext();
+            
+            var note = fullMelody[noteIndex];
+            var duration = note.d * baseNoteDuration / 1000;
+            
+            if (note.f > 0) {
+                // 主旋律 - 使用三角波模拟古筝/笛子音色
+                var osc = audioCtx.createOscillator();
+                var gain = audioCtx.createGain();
+                var filter = audioCtx.createBiquadFilter();
+                
+                osc.type = 'triangle';
+                osc.frequency.value = note.f;
+                
+                // 滤波器使声音更柔和
+                filter.type = 'lowpass';
+                filter.frequency.value = 2000;
+                filter.Q.value = 1;
+                
+                // 音量包络 - 模拟古风乐器的渐弱
+                gain.gain.setValueAtTime(0, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(bgmVolume, audioCtx.currentTime + 0.02);
+                gain.gain.setValueAtTime(bgmVolume * 0.8, audioCtx.currentTime + duration * 0.3);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration * 0.95);
+                
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(masterGain);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+                
+                // 添加泛音（八度上方，更轻）
+                var osc2 = audioCtx.createOscillator();
+                var gain2 = audioCtx.createGain();
+                osc2.type = 'sine';
+                osc2.frequency.value = note.f * 2;
+                gain2.gain.setValueAtTime(0, audioCtx.currentTime);
+                gain2.gain.linearRampToValueAtTime(bgmVolume * 0.15, audioCtx.currentTime + 0.02);
+                gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration * 0.7);
+                osc2.connect(gain2);
+                gain2.connect(masterGain);
+                osc2.start();
+                osc2.stop(audioCtx.currentTime + duration * 0.8);
+            }
+            
+            // 下一个音符
+            noteIndex = (noteIndex + 1) % fullMelody.length;
+            
+            // 安排下一个音符
+            setTimeout(playBGMNote, note.d * baseNoteDuration);
+        }
+        
+        // 低音伴奏（持续的底音）
+        var droneOsc = null;
+        var droneGain = null;
+        
+        function startDrone() {
+            ensureContext();
+            
+            droneOsc = audioCtx.createOscillator();
+            droneGain = audioCtx.createGain();
+            var filter = audioCtx.createBiquadFilter();
+            
+            droneOsc.type = 'sine';
+            droneOsc.frequency.value = 65.41; // C2 低音
+            
+            filter.type = 'lowpass';
+            filter.frequency.value = 150;
+            
+            droneGain.gain.value = bgmVolume * 0.4;
+            
+            droneOsc.connect(filter);
+            filter.connect(droneGain);
+            droneGain.connect(masterGain);
+            
+            droneOsc.start();
+            
+            // 缓慢的音高波动
+            var lfo = audioCtx.createOscillator();
+            var lfoGain = audioCtx.createGain();
+            lfo.frequency.value = 0.05;
+            lfoGain.gain.value = 2;
+            lfo.connect(lfoGain);
+            lfoGain.connect(droneOsc.frequency);
+            lfo.start();
+        }
+        
+        function stopDrone() {
+            if (droneOsc) {
+                droneOsc.stop();
+                droneOsc = null;
+            }
+        }
+        
+        return {
+            play: function(soundName, vol) {
+                if (sounds[soundName]) {
+                    sounds[soundName](vol || 0.5);
+                }
+            },
+            
+            startBGM: function(vol) {
+                ensureContext();
+                if (bgmPlaying) return;
+                
+                bgmPlaying = true;
+                bgmVolume = vol || 0.15;
+                noteIndex = 0;
+                
+                // 启动底音
+                startDrone();
+                
+                // 启动旋律
+                setTimeout(playBGMNote, 500);
+            },
+            
+            stopBGM: function() {
+                bgmPlaying = false;
+                stopDrone();
+            },
+            
+            setVolume: function(vol) {
+                ensureContext();
+                if (masterGain) {
+                    masterGain.gain.value = vol;
+                }
+            }
+        };
+    })();
+    
+    // 点击页面解锁音频
+    document.addEventListener('click', function() {
+        if (window.GameAudio) {
+            // 音频已准备好
+        }
+    }, { once: true });
+    </script>
+    
+    <script src="game.js"></script>
+</body>
+</html>
